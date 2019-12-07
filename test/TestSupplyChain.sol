@@ -10,53 +10,120 @@ import "truffle/DeployedAddresses.sol";
  are available through the truffle/DeployedAddresses.sol library */
 
 import "../contracts/SupplyChain.sol";
-
+import "../contracts/Proxy.sol";
 // All test contracts must start with Test (uppercase T)
 // This distinguishes this contract apart from test helpers
 // and project contracts.
 
 contract TestSupplyChain {
-
-    // address deployer = 0x41fafFaa11a9b57858ceeF3d371A55dde9ef764f;
-    // address buyer = 0x0f155C947D0065fa6CafC7d11963E7bf6E8c7302;
-    // address seller = 0xE7E86224567F43b0aDbB78a4B49CC54d694BEd3b;
-
-    // function testSettingAnOwnerDuringCreation() public {
-    //   SupplyChain supplyChain = SupplyChain(DeployedAddresses.SupplyChain());
-    //   Assert.equal(supplyChain.owner(), deployer, "An owner is different than a deployer");
-    // }
-
-    // function testbuyItemInsufficientFunds() public {
-    //   SupplyChain supplyChain = SupplyChain(DeployedAddresses.SupplyChain());
-    //   //addItem(string memory _name, uint _price
-    //   //function buyItem(uint _sku)
-    //   supplyChain.addItem("Phone", 100);
-    //   supplyChain.buyItem(100);
-    // }
-
-    // function testSomething() public {
-    //   //supplyChain.buyItem(100);
-    // }
-
-    // Test for failing conditions in this contracts:
+ // Test for failing conditions in this contracts:
     // https://truffleframework.com/tutorials/testing-for-throws-in-solidity-tests
 
+    uint public initialBalance = 1 ether;
 
+    enum State {
+        ForSale,
+        Sold,
+        Shipped,
+        Received
+    }
 
-    // buyItem
+    SupplyChain public chain;
+    Proxy public proxyseller;
+    Proxy public proxybuyer;
+    Proxy public proxyrandom;
 
+    string itemName = "testItem";
+    uint256 itemPrice = 3;
+    uint256 itemSku = 0;
 
-    // test for failure if user does not send enough funds
-    // test for purchasing an item that is not for Sale
+    // allow contract to receive ether
+    function () external payable {}
+
+    function beforeEach() public {
+        chain = new SupplyChain();
+        proxyseller = new Proxy(chain);
+        proxybuyer = new Proxy(chain);
+        proxyrandom = new Proxy(chain);
+        uint256 seedValue = itemPrice + 1;
+        address(proxyseller).transfer(seedValue);
+        address(proxybuyer).transfer(seedValue);
+    }
+
+    function testForFailureIfUserDoesNotSendEnoughFunds() public {
+        // Add an item
+        bool itemAddedResult = proxyseller.placeItemForSale(itemName, itemPrice);
+        Assert.isTrue(itemAddedResult, "placeItemForSale should return true");
+
+        // Try to buy but with less than amount. The sku is 0.
+        uint badPrice = itemPrice - 1;
+        bool purchaseItemResult = proxybuyer.purchaseItem(itemSku, badPrice);
+        Assert.isFalse(purchaseItemResult, "Should not be capable of buying");
+    }
+
+    function testPurchasingAnItemThatIsNotForSale() public {
+        // Add an item
+        bool itemAddedResult = proxyseller.placeItemForSale(itemName, itemPrice);
+        Assert.isTrue(itemAddedResult, "placeItemForSale should return true");
+
+        // Buy the item
+        uint correctPrice = itemPrice;
+        bool purchaseItemResult = proxybuyer.purchaseItem(itemSku, correctPrice);
+        Assert.isTrue(purchaseItemResult, "You failed to purchase the item");
+
+        // Since this item was purchased it should no longer exist
+        // So if we try to purchase it again, it should return false
+        purchaseItemResult = proxybuyer.purchaseItem(itemSku, correctPrice);
+        Assert.isFalse(purchaseItemResult, "You failed to purchase the item");
+
+    }
 
     // shipItem
 
-    // test for calls that are made by not the seller
-    // test for trying to ship an item that is not marked Sold
+    function testForCallsThatAreNotMadeBySeller() public {
+      bool itemShippedResult = proxyrandom.shipItem(itemSku);
+      Assert.isFalse(itemShippedResult, "Only the seller is allowed to ship");
+    }
+
+    function testeForTryingToSellAnItemNotMarkedAsSold() public {
+      bool itemAddedResult = proxyseller.placeItemForSale(itemName, itemPrice);
+      Assert.isTrue(itemAddedResult, "placeItemForSale should return true");
+
+      // Now since it is added, it has been sold let's try to ship it
+      bool shipItemResult = proxyseller.shipItem(itemSku);
+      Assert.isFalse(shipItemResult, "Should not be allowed to ship");
+    }
 
     // receiveItem
 
     // test calling the function from an address that is not the buyer
-    // test calling the function on an item not marked Shipped
+    function testCallingRecieveItemFromAddressThatIsNotTheBuyer() public {
+      // Add Item
+      bool itemAddedResult = proxyseller.placeItemForSale(itemName, itemPrice);
+      Assert.isTrue(itemAddedResult, "placeItemForSale should return true");
+      // Buy Item
+      uint correctPrice = itemPrice;
+      bool purchaseItemResult = proxybuyer.purchaseItem(itemSku, correctPrice);
+      Assert.isTrue(purchaseItemResult, "You failed to purchase the item");
+      // Ship Item
+      bool shipItem = proxyseller.shipItem(itemSku);
+      Assert.isTrue(shipItem, "Failed to ship item");
+      // Call Recieved from another address
+      bool ItemRecievedResult = proxyrandom.receiveItem(itemSku);
+      Assert.isFalse(ItemRecievedResult, "Only buyer should be allowed to call");
+    }
 
+    // test calling the function on an item not marked Shipped
+    function testCallingRecieveItemOnAnItemMarkedNotShipped() public {
+      // Add Item
+      bool itemAddedResult = proxyseller.placeItemForSale(itemName, itemPrice);
+      Assert.isTrue(itemAddedResult, "placeItemForSale should return true");
+      // Buy Item
+      uint correctPrice = itemPrice;
+      bool purchaseItemResult = proxybuyer.purchaseItem(itemSku, correctPrice);
+      Assert.isTrue(purchaseItemResult, "You failed to purchase the item");
+      // Attempt to recieve item before it is shipped
+      bool receiveItemResult = proxybuyer.receiveItem(itemSku);
+      Assert.isFalse(receiveItemResult, "recieveItem should fail");
+    }
 }
